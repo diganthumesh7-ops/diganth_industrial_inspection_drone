@@ -1,0 +1,325 @@
+clc;
+clear;
+close all;
+rng(7);
+
+%% =========================================================
+% AEROGUARD AI
+% Intelligent Adaptive Stabilization System
+% for Industrial Inspection Drones
+%% =========================================================
+
+fprintf('====================================================\n');
+fprintf('              AEROGUARD AI SYSTEM\n');
+fprintf(' Intelligent Adaptive Drone Stabilization\n');
+fprintf('====================================================\n');
+
+%% =========================================================
+% PLANT MODEL
+% G(s) = 1 / (s^2 + 2s + 5)
+%% =========================================================
+
+s = tf('s');
+G = 1/(s^2 + 2*s + 5);
+
+disp('Open Loop Transfer Function:')
+G
+
+figure;
+step(G);
+grid on;
+title('Open Loop Step Response');
+
+%% =========================================================
+% SIMULATION SETUP
+%% =========================================================
+
+dt   = 0.01;
+Tend = 20;
+t    = 0:dt:Tend;
+N    = numel(t);
+
+ref = ones(1, N);
+
+% Industrial disturbance profile: wind gusts near towers
+disturbance = zeros(1, N);
+disturbance(t >= 4  & t < 6)  = 0.30;
+disturbance(t >= 9  & t < 11) = 0.60;
+disturbance(t >= 14 & t < 16) = 0.90;
+
+figure;
+plot(t, disturbance, 'LineWidth', 2);
+grid on;
+title('Industrial Disturbance Profile');
+xlabel('Time (s)');
+ylabel('Disturbance Magnitude');
+
+%% =========================================================
+% FIXED PID BASELINE
+%% =========================================================
+
+Kp_fixed = 25;
+Ki_fixed = 12;
+Kd_fixed = 6;
+
+C_fixed = pid(Kp_fixed, Ki_fixed, Kd_fixed);
+disp('Fixed PID Controller:')
+C_fixed
+
+T_fixed = feedback(C_fixed * G, 1);
+
+figure;
+step(T_fixed, t);
+grid on;
+title('Closed Loop Step Response with Fixed PID');
+
+info_fixed = stepinfo(T_fixed);
+
+fprintf('\n================ FIXED PID METRICS ================\n');
+fprintf('Overshoot      : %.2f %%\n', info_fixed.Overshoot);
+fprintf('Rise Time      : %.2f sec\n', info_fixed.RiseTime);
+fprintf('Settling Time  : %.2f sec\n', info_fixed.SettlingTime);
+
+%% =========================================================
+% ADAPTIVE PID SIMULATION - NO DISTURBANCE
+% This gives clean controller metrics
+%% =========================================================
+
+[y_adapt_clean, u_adapt_clean, Kp_hist_clean, Ki_hist_clean, Kd_hist_clean] = ...
+    simulateAeroGuard('adaptive', t, dt, zeros(1, N));
+
+metrics_clean = calcMetrics(t, y_adapt_clean, ref);
+
+%% =========================================================
+% ADAPTIVE PID SIMULATION - WITH DISTURBANCE
+%% =========================================================
+
+[y_adapt_dist, u_adapt_dist, Kp_hist, Ki_hist, Kd_hist] = ...
+    simulateAeroGuard('adaptive', t, dt, disturbance);
+
+metrics_dist = calcMetrics(t, y_adapt_dist, ref);
+
+%% =========================================================
+% FIXED PID SIMULATION - WITH DISTURBANCE
+%% =========================================================
+
+[y_fixed_dist, u_fixed_dist] = ...
+    simulateAeroGuard('fixed', t, dt, disturbance);
+
+metrics_fixed_dist = calcMetrics(t, y_fixed_dist, ref);
+
+%% =========================================================
+% PERFORMANCE COMPARISON
+%% =========================================================
+
+fprintf('\n================ PERFORMANCE COMPARISON ================\n');
+
+fprintf('Fixed PID (with disturbance):\n');
+fprintf('  Overshoot           = %.2f %%\n', metrics_fixed_dist.Overshoot);
+fprintf('  Rise Time           = %.2f sec\n', metrics_fixed_dist.RiseTime);
+fprintf('  Settling Time       = %.2f sec\n', metrics_fixed_dist.SettlingTime);
+fprintf('  Steady-State Error  = %.4f\n', metrics_fixed_dist.SSE);
+
+fprintf('\nAdaptive PID (clean, no disturbance):\n');
+fprintf('  Overshoot           = %.2f %%\n', metrics_clean.Overshoot);
+fprintf('  Rise Time           = %.2f sec\n', metrics_clean.RiseTime);
+fprintf('  Settling Time       = %.2f sec\n', metrics_clean.SettlingTime);
+fprintf('  Steady-State Error  = %.4f\n', metrics_clean.SSE);
+
+fprintf('\nAdaptive PID (with disturbance):\n');
+fprintf('  Overshoot           = %.2f %%\n', metrics_dist.Overshoot);
+fprintf('  Rise Time           = %.2f sec\n', metrics_dist.RiseTime);
+fprintf('  Settling Time       = %.2f sec\n', metrics_dist.SettlingTime);
+fprintf('  Steady-State Error  = %.4f\n', metrics_dist.SSE);
+
+%% =========================================================
+% PLOTS
+%% =========================================================
+
+% Fixed vs Adaptive response with disturbance
+figure;
+plot(t, ref, 'k--', 'LineWidth', 1.5); hold on;
+plot(t, y_fixed_dist, 'LineWidth', 1.5);
+plot(t, y_adapt_dist, 'LineWidth', 2);
+grid on;
+title('Fixed PID vs Adaptive PID Response Under Disturbance');
+xlabel('Time (s)');
+ylabel('Drone Altitude');
+legend('Reference', 'Fixed PID', 'Adaptive PID', 'Location', 'best');
+
+% Control effort comparison
+figure;
+plot(t, u_fixed_dist, 'LineWidth', 1.5); hold on;
+plot(t, u_adapt_dist, 'LineWidth', 2);
+grid on;
+title('Control Effort Comparison');
+xlabel('Time (s)');
+ylabel('Control Signal');
+legend('Fixed PID', 'Adaptive PID', 'Location', 'best');
+
+% Adaptive gain scheduling
+figure;
+subplot(3,1,1);
+plot(t, Kp_hist, 'LineWidth', 1.5);
+grid on;
+ylabel('Kp');
+title('Adaptive PID Gain Scheduling');
+
+subplot(3,1,2);
+plot(t, Ki_hist, 'LineWidth', 1.5);
+grid on;
+ylabel('Ki');
+
+subplot(3,1,3);
+plot(t, Kd_hist, 'LineWidth', 1.5);
+grid on;
+ylabel('Kd');
+xlabel('Time (s)');
+
+% Pole-zero map of the fixed controller closed loop
+figure;
+pzmap(T_fixed);
+grid on;
+title('Pole-Zero Map of Fixed PID Closed Loop');
+
+% Frequency response
+figure;
+bode(T_fixed);
+grid on;
+title('Frequency Response of Fixed PID Closed Loop');
+
+fprintf('\n================ FINAL SUMMARY ================\n');
+fprintf('AeroGuard AI simulation completed successfully.\n');
+fprintf('Adaptive control shows gain changes under turbulence and maintains stability.\n');
+
+%% =========================================================
+% LOCAL FUNCTIONS
+%% =========================================================
+
+function [y, u, Kp_hist, Ki_hist, Kd_hist] = simulateAeroGuard(mode, t, dt, disturbance)
+    % Drone state-space model
+    A = [0 1; -5 -2];
+    B = [0; 1];
+    Cmat = [1 0];
+
+    N = numel(t);
+    ref = ones(1, N);
+
+    % Simulation settings
+    noiseAmp = 0.01;
+    uMax = 10;
+    alpha = 0.85;
+
+    % Initial state
+    x = [0; 0];
+
+    % Output arrays
+    y = zeros(1, N);
+    u = zeros(1, N);
+
+    Kp_hist = zeros(1, N);
+    Ki_hist = zeros(1, N);
+    Kd_hist = zeros(1, N);
+
+    % Controller memory
+    eInt = 0;
+    ePrev = 0;
+    dFilt = 0;
+
+    for k = 1:N
+        % Sensor measurement with noise
+        yMeas = Cmat * x + noiseAmp * randn;
+        e = ref(k) - yMeas;
+
+        de = (e - ePrev) / dt;
+        dFilt = alpha * dFilt + (1 - alpha) * de;
+
+        % Controller selection
+        if strcmp(mode, 'fixed')
+            Kp = 25;
+            Ki = 12;
+            Kd = 6;
+        else
+            % Adaptive disturbance classification
+            dNow = abs(disturbance(k));
+
+            if dNow < 0.20
+                Kp = 20;
+                Ki = 10;
+                Kd = 5;
+            elseif dNow < 0.70
+                Kp = 28;
+                Ki = 10;
+                Kd = 6;
+            else
+                Kp = 34;
+                Ki = 12;
+                Kd = 8;
+            end
+
+            % Emergency stabilization mode
+            if abs(e) > 0.8
+                Kp = Kp + 3;
+                Kd = Kd + 1;
+            end
+        end
+
+        Kp_hist(k) = Kp;
+        Ki_hist(k) = Ki;
+        Kd_hist(k) = Kd;
+
+        % PID control
+        uUnsat = Kp * e + Ki * eInt + Kd * dFilt;
+
+        % Saturation
+        uSat = max(min(uUnsat, uMax), -uMax);
+        u(k) = uSat;
+
+        % Anti-windup
+        if abs(uSat - uUnsat) < 1e-9 || sign(e) ~= sign(uUnsat - uSat)
+            eInt = eInt + e * dt;
+        end
+
+        % Plant update
+        xDot = A * x + B * (uSat + disturbance(k));
+        x = x + dt * xDot;
+
+        % Store true output
+        y(k) = Cmat * x;
+
+        ePrev = e;
+    end
+end
+
+function m = calcMetrics(t, y, ref)
+    yFinal = ref(end);
+
+    % Overshoot
+    peakVal = max(y);
+    m.Overshoot = max(0, (peakVal - yFinal) / abs(yFinal) * 100);
+
+    % Rise time (10% to 90%)
+    idx10 = find(y >= 0.1 * yFinal, 1, 'first');
+    idx90 = find(y >= 0.9 * yFinal, 1, 'first');
+
+    if isempty(idx10) || isempty(idx90)
+        m.RiseTime = NaN;
+    else
+        m.RiseTime = t(idx90) - t(idx10);
+    end
+
+    % Settling time (2% band)
+    band = 0.02 * abs(yFinal);
+    idxOutside = find(abs(y - yFinal) > band, 1, 'last');
+
+    if isempty(idxOutside)
+        m.SettlingTime = 0;
+    elseif idxOutside == numel(t)
+        m.SettlingTime = NaN;
+    else
+        m.SettlingTime = t(idxOutside + 1);
+    end
+
+    % Steady-state error
+    m.SSE = abs(yFinal - y(end));
+end
